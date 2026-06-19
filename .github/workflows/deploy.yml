@@ -13,7 +13,17 @@ jobs:
     steps:
       - name: Trigger deploy & stream build logs
         run: |
-          echo "Triggering CM Cloud deploy hook..."
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          AUTHOR="${{ github.event.head_commit.author.name }}"
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  CM Cloud Deploy"
+          echo "  Commit  : $SHORT_SHA — $COMMIT_MSG"
+          echo "  Author  : $AUTHOR"
+          echo "  Branch  : ${{ github.ref_name }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
 
           response=$(curl -s -w "\n__HTTP_STATUS__%{http_code}" \
@@ -24,17 +34,27 @@ jobs:
           http_status=$(echo "$response" | tail -n1 | sed 's/__HTTP_STATUS__//')
           body=$(echo "$response" | sed '$d')
 
-          echo "── Build output ──────────────────────────────────────────────"
+          echo "── Build log ─────────────────────────────────────────────────"
           echo "$body" | python3 -c "
           import sys, json
           try:
               d = json.load(sys.stdin)
-              logs = d.get('logs') or d.get('detail', {})
-              if isinstance(logs, dict):
-                  logs = logs.get('logs', '')
-              print(logs or '(no build output)')
-          except Exception:
-              print(sys.stdin.read())
+              logs = d.get('logs') or ''
+              if isinstance(d.get('detail'), dict):
+                  logs = d['detail'].get('logs', '') or ''
+              # Print logs, filtering out raw JSON metadata blob at the end
+              lines = (logs or '(no build output)').splitlines()
+              in_json = False
+              for line in lines:
+                  stripped = line.strip()
+                  if stripped == '{' and not in_json:
+                      in_json = True
+                  if not in_json:
+                      print(line)
+                  if stripped == '}' and in_json:
+                      in_json = False
+          except Exception as e:
+              sys.stdout.write(sys.stdin.read())
           " 2>/dev/null || echo "$body"
           echo "──────────────────────────────────────────────────────────────"
           echo ""
@@ -42,10 +62,27 @@ jobs:
           if [ "$http_status" = "200" ]; then
             domain=$(echo "$body" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('domain',''))" 2>/dev/null)
             release=$(echo "$body" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('release',''))" 2>/dev/null)
-            echo "Deploy successful!"
+            echo "✓ Deploy successful!"
+            echo "  Commit  : $SHORT_SHA — $COMMIT_MSG"
             echo "  Release : $release"
-            echo "  Domain  : https://$domain"
+            echo "  App URL : https://$domain"
           else
-            echo "Deploy failed with HTTP $http_status"
+            echo "✗ Deploy failed (HTTP $http_status)"
+            echo "$body" | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)
+              err = d.get('detail', {})
+              if isinstance(err, dict):
+                  print('Error  :', err.get('error', 'unknown'))
+                  logs = err.get('logs', '')
+                  if logs:
+                      print('Logs   :')
+                      print(logs[-2000:])
+              else:
+                  print(err)
+          except Exception:
+              print(sys.stdin.read())
+            " 2>/dev/null
             exit 1
           fi
