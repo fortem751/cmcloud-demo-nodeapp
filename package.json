@@ -4,6 +4,7 @@
   "description": "Full-stack demo: Node.js + PocketBase — CM Cloud App Deploy",
   "main": "server.js",
   "scripts": {
+    "build": "echo 'No build step'",
     "start": "node server.js"
   },
   "dependencies": {
