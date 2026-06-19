@@ -1,0 +1,51 @@
+name: Deploy to CM Cloud
+
+on:
+  push:
+    branches: [master, main]
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Trigger deploy & stream build logs
+        run: |
+          echo "Triggering CM Cloud deploy hook..."
+          echo ""
+
+          response=$(curl -s -w "\n__HTTP_STATUS__%{http_code}" \
+            -X POST "${{ secrets.CM_DEPLOY_HOOK_URL }}?sync=true" \
+            -H "Accept: application/json" \
+            --max-time 300)
+
+          http_status=$(echo "$response" | tail -n1 | sed 's/__HTTP_STATUS__//')
+          body=$(echo "$response" | sed '$d')
+
+          echo "── Build output ──────────────────────────────────────────────"
+          echo "$body" | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)
+              logs = d.get('logs') or d.get('detail', {})
+              if isinstance(logs, dict):
+                  logs = logs.get('logs', '')
+              print(logs or '(no build output)')
+          except Exception:
+              print(sys.stdin.read())
+          " 2>/dev/null || echo "$body"
+          echo "──────────────────────────────────────────────────────────────"
+          echo ""
+
+          if [ "$http_status" = "200" ]; then
+            domain=$(echo "$body" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('domain',''))" 2>/dev/null)
+            release=$(echo "$body" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('release',''))" 2>/dev/null)
+            echo "Deploy successful!"
+            echo "  Release : $release"
+            echo "  Domain  : https://$domain"
+          else
+            echo "Deploy failed with HTTP $http_status"
+            exit 1
+          fi
